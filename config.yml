@@ -1,0 +1,19 @@
+port: 8000
+rate_limit_per_second: 50
+routes:
+  user-service:
+    path: /api/users
+    target: http://localhost:3001
+    strip_prefix: false
+  chat-service-api:
+    path: /api/chat
+    target: http://localhost:3002
+    strip_prefix: false
+  chat-service-ws:
+    path: /ws/chat
+    target: ws://localhost:3002
+    strip_prefix: false
+  fallback:
+    path: /
+    target: http://localhost:8080
+    strip_prefix: false
