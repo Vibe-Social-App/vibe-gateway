@@ -7,6 +7,7 @@ use axum::{
 use reqwest::Client;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tracing::debug;
 
 use crate::config::GatewayConfig;
 
