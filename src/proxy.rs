@@ -135,6 +135,9 @@ pub async fn proxy_handler(
         if let Ok(conn_str) = conn_header.to_str() {
             for token in conn_str.split(',') {
                 let clean_token = token.trim().to_lowercase();
+                if is_upgrade && clean_token == "upgrade" {
+                    continue;
+                }
                 if !hop_by_hop.contains(&clean_token) {
                     hop_by_hop.push(clean_token);
                 }
