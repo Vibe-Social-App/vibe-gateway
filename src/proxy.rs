@@ -158,15 +158,18 @@ pub async fn proxy_handler(
         headers.insert("x-forwarded-proto", proto_val);
     }
 
-    let body_stream = req.into_body().into_data_stream();
-    let proxy_body = reqwest::Body::wrap_stream(body_stream);
-
+    let is_get = method == axum::http::Method::GET;
     let mut proxy_req = state.client.request(method, target_url_str);
+    
     for (name, value) in headers.iter() {
         proxy_req = proxy_req.header(name.as_str(), value.as_bytes());
     }
     
-    proxy_req = proxy_req.body(proxy_body);
+    if !is_get && !is_upgrade {
+        let body_stream = req.into_body().into_data_stream();
+        let proxy_body = reqwest::Body::wrap_stream(body_stream);
+        proxy_req = proxy_req.body(proxy_body);
+    }
     
     let res = match proxy_req.send().await {
         Ok(r) => r,
