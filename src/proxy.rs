@@ -23,6 +23,8 @@ pub async fn proxy_handler(
     let path = req.uri().path();
     let query = req.uri().query().unwrap_or_default();
     
+    debug!("Proxying request: {}?{}", path, query);
+    
     let mut matched_route = None;
     let mut longest_match = 0;
     

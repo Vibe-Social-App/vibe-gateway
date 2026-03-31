@@ -52,6 +52,7 @@ pub async fn run() {
     });
 
     let cors = CorsLayer::new()
+        .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
     
