@@ -13,6 +13,10 @@ routes:
     path: /ws/chat
     target: ws://localhost:3002
     strip_prefix: false
+  webrtc-service:
+    path: /wrtc
+    target: http://localhost:3400
+    strip_prefix: false
   fallback:
     path: /
     target: http://localhost:8080

@@ -16,7 +16,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+// use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
 pub async fn run() {
     tracing_subscriber::registry()
@@ -29,16 +29,15 @@ pub async fn run() {
 
     let config = load_config("config.yml").expect("Failed to load config.yml");
     let port = config.port;
-    
-    let rate_limit = config.rate_limit_per_second.unwrap_or(100);
-    
-    let governor_conf = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(rate_limit)
-            .burst_size(rate_limit as u32 * 2)
-            .finish()
-            .unwrap()
-    );
+    // Temporarily disabled so the mobile team can test without throttling.
+    // let rate_limit = config.rate_limit_per_second.unwrap_or(100);
+    // let governor_conf = Arc::new(
+    //     GovernorConfigBuilder::default()
+    //         .per_second(rate_limit)
+    //         .burst_size(rate_limit as u32 * 2)
+    //         .finish()
+    //         .unwrap()
+    // );
     
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -54,13 +53,15 @@ pub async fn run() {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
-    
-    let governor_layer = GovernorLayer::new(governor_conf);
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ]);
+    // let governor_layer = GovernorLayer::new(governor_conf);
 
     let app = Router::new()
         .fallback(any(proxy_handler))
-        .layer(governor_layer)
+        // .layer(governor_layer)
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -76,4 +77,3 @@ pub async fn run() {
     .await
     .unwrap();
 }
-
