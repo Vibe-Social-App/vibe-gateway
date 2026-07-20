@@ -1,6 +1,10 @@
 port: 8000
 rate_limit_per_second: 50
 routes:
+  user-service-uploads:
+    path: /api/uploads
+    target: http://localhost:3001
+    strip_prefix: false
   user-service:
     path: /api/users
     target: http://localhost:3001
@@ -16,6 +20,10 @@ routes:
   webrtc-service:
     path: /wrtc
     target: http://localhost:3400
+    strip_prefix: false
+  webrtc-service-ws:
+    path: /wrtc/rooms/ws
+    target: ws://localhost:3400
     strip_prefix: false
   fallback:
     path: /
