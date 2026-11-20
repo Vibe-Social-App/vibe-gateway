@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
   pull_request:
   workflow_dispatch:
 
@@ -32,7 +33,7 @@ jobs:
 
   build-and-push:
     needs: test
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     env:
@@ -63,3 +64,30 @@ jobs:
 
       - name: Push sha tag
         run: podman push $IMAGE_NAME:${{ env.SHORT_SHA }}
+
+  # Deploys this service through infra-ansible after the image was built from main.
+  # Put [skip deploy] in the commit message to publish the image without deploying.
+  deploy:
+    needs: build-and-push
+    if: ${{ github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip deploy]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via infra-ansible
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::INFRA_DISPATCH_TOKEN is not set; image published but not deployed"
+            exit 0
+          fi
+          id="${GITHUB_REPOSITORY##*/}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh workflow run deploy.yml -R Vibe-Social-App/infra-ansible -f service=api_gateway -f correlation_id="$id"
+          run=""
+          for i in $(seq 1 40); do
+            run=$(gh run list -R Vibe-Social-App/infra-ansible --workflow deploy.yml --limit 30 --json databaseId,displayTitle -q ".[]|select(.displayTitle|endswith(\"$id\"))|.databaseId" | head -1)
+            [ -n "$run" ] && break
+            sleep 3
+          done
+          [ -n "$run" ] || { echo "::error::could not find the deploy run"; exit 1; }
+          echo "deploy run: https://github.com/Vibe-Social-App/infra-ansible/actions/runs/$run"
+          gh run watch "$run" -R Vibe-Social-App/infra-ansible --exit-status --interval 10
