@@ -67,6 +67,8 @@ jobs:
 
   # Deploys this service through infra-ansible after the image was built from main.
   # Put [skip deploy] in the commit message to publish the image without deploying.
+  # Plain REST calls on purpose: the token only has "Actions: read and write" on infra-ansible,
+  # while `gh workflow run` also needs to read the default branch (contents) and fails.
   deploy:
     needs: build-and-push
     if: ${{ github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip deploy]') }}
@@ -80,14 +82,22 @@ jobs:
             echo "::warning::INFRA_DISPATCH_TOKEN is not set; image published but not deployed"
             exit 0
           fi
+          api=repos/Vibe-Social-App/infra-ansible/actions
           id="${GITHUB_REPOSITORY##*/}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          gh workflow run deploy.yml -R Vibe-Social-App/infra-ansible -f service=api_gateway -f correlation_id="$id"
+          gh api -X POST "$api/workflows/deploy.yml/dispatches" -f ref=main -f "inputs[service]=api_gateway" -f "inputs[correlation_id]=$id"
           run=""
           for i in $(seq 1 40); do
-            run=$(gh run list -R Vibe-Social-App/infra-ansible --workflow deploy.yml --limit 30 --json databaseId,displayTitle -q ".[]|select(.displayTitle|endswith(\"$id\"))|.databaseId" | head -1)
+            run=$(gh api "$api/workflows/deploy.yml/runs?event=workflow_dispatch&per_page=30" --jq ".workflow_runs[]|select(.display_title|endswith(\"$id\"))|.id" | head -1)
             [ -n "$run" ] && break
             sleep 3
           done
           [ -n "$run" ] || { echo "::error::could not find the deploy run"; exit 1; }
           echo "deploy run: https://github.com/Vibe-Social-App/infra-ansible/actions/runs/$run"
-          gh run watch "$run" -R Vibe-Social-App/infra-ansible --exit-status --interval 10
+          while true; do
+            state=$(gh api "$api/runs/$run" --jq '"\(.status) \(.conclusion)"')
+            case "$state" in
+              "completed success") echo "deploy finished: success"; exit 0 ;;
+              completed*) echo "::error::deploy finished: $state"; exit 1 ;;
+            esac
+            sleep 10
+          done
