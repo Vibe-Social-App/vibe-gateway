@@ -10,10 +10,22 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::config::GatewayConfig;
+use crate::settings::UpstreamSettings;
 
 pub struct AppState {
     pub config: GatewayConfig,
     pub client: Client,
+    pub settings: UpstreamSettings,
+}
+
+fn gateway_error(status: StatusCode, msg: &str) -> Response<Body> {
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            format!(r#"{{"error":"{}","status":{}}}"#, msg, status.as_u16()),
+        ))
+        .unwrap()
 }
 
 pub async fn proxy_handler(
@@ -22,6 +34,7 @@ pub async fn proxy_handler(
     mut req: Request<Body>,
 ) -> Result<Response<Body>, StatusCode> {
     let path = req.uri().path();
+    let req_path = path.to_string();
     let query = req.uri().query().unwrap_or_default();
     
     debug!("Proxying request: {}?{}", path, query);
@@ -164,6 +177,7 @@ pub async fn proxy_handler(
         headers.insert("x-forwarded-proto", proto_val);
     }
 
+    let timeout = state.settings.timeout_for(&req_path);
     let is_get = method == axum::http::Method::GET;
     let mut proxy_req = state.client.request(method, target_url_str);
     
@@ -177,11 +191,26 @@ pub async fn proxy_handler(
         proxy_req = proxy_req.body(proxy_body);
     }
     
-    let res = match proxy_req.send().await {
+    // WebSocket upgrades are exempt; other requests must get response headers
+    // within the (route-dependent) limit. The body is not time-limited.
+    let send_result = if is_upgrade {
+        proxy_req.send().await
+    } else {
+        match tokio::time::timeout(timeout, proxy_req.send()).await {
+            Ok(r) => r,
+            Err(_) => return Ok(gateway_error(StatusCode::GATEWAY_TIMEOUT, "upstream timed out")),
+        }
+    };
+    let res = match send_result {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("Proxy error: {:?}", e);
-            return Err(StatusCode::BAD_GATEWAY);
+            let (code, msg) = if e.is_timeout() {
+                (StatusCode::GATEWAY_TIMEOUT, "upstream timed out")
+            } else {
+                (StatusCode::BAD_GATEWAY, "upstream unavailable")
+            };
+            return Ok(gateway_error(code, msg));
         }
     };
     
