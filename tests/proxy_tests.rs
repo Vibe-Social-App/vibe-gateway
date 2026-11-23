@@ -64,6 +64,7 @@ async fn test_proxy_basic_rewrite() {
     let state = Arc::new(AppState {
         config,
         client: Client::new(),
+        settings: Default::default(),
     });
 
     let app = Router::new()
@@ -128,6 +129,7 @@ async fn test_proxy_not_found() {
     let state = Arc::new(AppState {
         config,
         client: Client::new(),
+        settings: Default::default(),
     });
 
     let app = Router::new()
@@ -177,6 +179,7 @@ async fn test_starts_with_boundary_bug() {
     let state = Arc::new(AppState {
         config,
         client: Client::new(),
+        settings: Default::default(),
     });
 
     let app = Router::new()
@@ -234,6 +237,7 @@ async fn test_rate_limiting() {
     let state = Arc::new(AppState {
         config,
         client: Client::new(),
+        settings: Default::default(),
     });
 
     let governor_conf = Arc::new(
@@ -318,6 +322,7 @@ async fn test_load_balancing_round_robin() {
     let state = std::sync::Arc::new(AppState {
         config,
         client: Client::new(),
+        settings: Default::default(),
     });
 
     let app = Router::new()
@@ -347,4 +352,101 @@ async fn test_load_balancing_round_robin() {
     assert_eq!(hits.get("backend-1"), Some(&2));
     assert_eq!(hits.get("backend-2"), Some(&2));
     assert_eq!(hits.get("backend-3"), Some(&2));
+}
+
+// ---- upstream timeout tests ----
+
+async fn start_slow_backend() -> u16 {
+    let app = Router::new()
+        .route("/slow", get(|| async {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            "slow ok"
+        }))
+        .route("/api/uploads/slow", get(|| async {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            "slow ok"
+        }))
+        .route("/fast", get(|| async { "fast ok" }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    port
+}
+
+async fn start_gateway_with(
+    target: String,
+    settings: api_gateway::settings::UpstreamSettings,
+) -> u16 {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "r".to_string(),
+        RouteConfig {
+            path: "/".to_string(),
+            target: Some(target),
+            targets: None,
+            counter: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            strip_prefix: false,
+        },
+    );
+    let config = GatewayConfig { port: 0, rate_limit_per_second: None, routes };
+    let client = api_gateway::settings::build_client(&settings);
+    let state = Arc::new(AppState { config, client, settings });
+    let app = Router::new()
+        .fallback(axum::routing::any(proxy_handler))
+        .with_state(state);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
+    });
+    port
+}
+
+fn short_settings() -> api_gateway::settings::UpstreamSettings {
+    let mut s = api_gateway::settings::UpstreamSettings::default();
+    s.timeout = std::time::Duration::from_secs(1);
+    s.long_timeout = std::time::Duration::from_secs(10);
+    s
+}
+
+#[tokio::test]
+async fn test_upstream_timeout_returns_504_quickly() {
+    let backend = start_slow_backend().await;
+    let gw = start_gateway_with(format!("http://127.0.0.1:{}", backend), short_settings()).await;
+    let start = std::time::Instant::now();
+    let res = reqwest::get(format!("http://127.0.0.1:{}/slow", gw)).await.unwrap();
+    assert_eq!(res.status(), 504);
+    assert!(start.elapsed() < std::time::Duration::from_millis(2500));
+    let body = res.text().await.unwrap();
+    assert!(body.contains("\"error\""));
+}
+
+#[tokio::test]
+async fn test_long_route_not_cut_by_timeout() {
+    let backend = start_slow_backend().await;
+    let gw = start_gateway_with(format!("http://127.0.0.1:{}", backend), short_settings()).await;
+    let res = reqwest::get(format!("http://127.0.0.1:{}/api/uploads/slow", gw)).await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().await.unwrap(), "slow ok");
+}
+
+#[tokio::test]
+async fn test_fast_request_unaffected() {
+    let backend = start_slow_backend().await;
+    let gw = start_gateway_with(format!("http://127.0.0.1:{}", backend), short_settings()).await;
+    let res = reqwest::get(format!("http://127.0.0.1:{}/fast", gw)).await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().await.unwrap(), "fast ok");
+}
+
+#[tokio::test]
+async fn test_connection_refused_returns_502() {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = l.local_addr().unwrap().port();
+    drop(l);
+    let gw = start_gateway_with(format!("http://127.0.0.1:{}", dead), short_settings()).await;
+    let res = reqwest::get(format!("http://127.0.0.1:{}/fast", gw)).await.unwrap();
+    assert_eq!(res.status(), 502);
 }

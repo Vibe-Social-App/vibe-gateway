@@ -90,6 +90,17 @@ The server will start on `0.0.0.0:8000` (or the port specified in your config).
 | `routes.<name>.target` | The target backend URL (http, https, ws). | - |
 | `routes.<name>.strip_prefix` | Whether to remove the base path before forwarding. | `false` |
 
+### Environment variables
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `UPSTREAM_TIMEOUT_SECS` | Max wait for an upstream to start responding. On expiry the gateway returns `504` with a JSON body. Response bodies are streamed without a limit. | `10` |
+| `UPSTREAM_CONNECT_TIMEOUT_SECS` | Max time to connect to an upstream (connection errors return `502`). | `3` |
+| `UPSTREAM_LONG_ROUTES` | Comma separated path prefixes that get a 300 s header wait instead of the default (uploads, HLS). | `/api/uploads,/wrtc/hls` |
+| `RUST_LOG` | Log filter. | `info` (Docker image) |
+
+WebSocket upgrades are never subject to the upstream timeout. TCP keepalive (60 s) and `TCP_NODELAY` are enabled on upstream connections.
+
 ---
 
 ## 🧪 Development & Testing

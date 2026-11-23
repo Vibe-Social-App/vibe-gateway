@@ -1,5 +1,6 @@
 pub mod config;
 pub mod proxy;
+pub mod settings;
 
 pub use config::load_config;
 pub use proxy::{proxy_handler, AppState};
@@ -9,7 +10,6 @@ use axum::{
     Router,
 };
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -22,7 +22,7 @@ pub async fn run() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "api_gateway=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "api_gateway=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -39,15 +39,14 @@ pub async fn run() {
     //         .unwrap()
     // );
     
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .pool_idle_timeout(Duration::from_secs(90))
-        .build()
-        .expect("Failed to build reqwest client");
+    let settings = settings::UpstreamSettings::from_env();
+    tracing::info!("Upstream settings: {:?}", settings);
+    let client = settings::build_client(&settings);
 
     let state = Arc::new(AppState {
         config,
         client,
+        settings,
     });
 
     let cors = CorsLayer::new()
